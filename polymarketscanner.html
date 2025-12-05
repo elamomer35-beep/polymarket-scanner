@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Polymarket Scanner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, sans-serif; }
+    body { background: #020617; color: #e5e7eb; min-height: 100vh; display: flex; justify-content: center; padding: 24px; }
+    .app { width: 100%; max-width: 1200px; background: #0f172a; border-radius: 24px; padding: 24px; box-shadow: 0 0 40px rgba(0,0,0,0.7); }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
+    .logo { display: flex; align-items: center; gap: 12px; }
+    .logo-icon { background: #4f46e5; padding: 10px 14px; border-radius: 10px; font-weight: bold; }
+    .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+    select, input { padding: 8px 12px; border-radius: 12px; border: 1px solid #475569; background: #1e293b; color: white; }
+    .primary-btn { padding: 8px 14px; background: #16a34a; color: white; border-radius: 12px; cursor: pointer; border: none; }
+    .table-wrapper { margin-top: 14px; max-height: 550px; overflow-y: auto; border-radius: 12px; border: 1px solid #475569; }
+    table { width: 100%; border-collapse: collapse; min-width: 700px; }
+    th, td { padding: 10px; border-bottom: 1px solid #334155; }
+    th { background: #1e293b; position: sticky; top: 0; }
+    .pill { padding: 2px 6px; border-radius: 12px; border: 1px solid #475569; display: inline-block; margin-bottom: 3px; }
+    .pill-green { border-color: #22c55e; }
+    .pill-red { border-color: #ef4444; }
+    a { color: #38bdf8; text-decoration: none; font-size: 12px; }
+    a:hover { text-decoration: underline; }
+    .error { color: #ef4444; margin-top: 6px; }
+  </style>
+</head>
+<body>
+
+<div class="app">
+  <header>
+    <div class="logo">
+      <div class="logo-icon">PM</div>
+      <div>
+        <div style="font-weight:700; font-size:18px;">Polymarket Scanner</div>
+        <div style="font-size:12px; opacity:0.7;">Find active markets & pricing gaps</div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <input id="tag-input" placeholder="Filter (e.g. politics)">
+      <select id="sort-select">
+        <option value="liquidity">Most Liquid</option>
+        <option value="volume24h">24h Volume</option>
+        <option value="bundleGap">Bundle Gap</option>
+        <option value="endSoon">Ending Soon</option>
+      </select>
+      <button id="refresh-btn" class="primary-btn">Refresh</button>
+    </div>
+  </header>
+
+  <div id="status-text">Loading markets…</div>
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th>Market</th>
+          <th>Category</th>
+          <th>Yes / No</th>
+          <th>Liquidity</th>
+          <th>24h Volume</th>
+          <th>Bundle Gap</th>
+        </tr>
+      </thead>
+      <tbody id="markets-body"></tbody>
+    </table>
+  </div>
+
+  <div id="error-text" class="error"></div>
+</div>
+
+<script>
+const API_BASE = "https://gamma-api.polymarket.com";
+
+let rawMarkets = [];
+const tbody = document.getElementById("markets-body");
+const statusText = document.getElementById("status-text");
+const errorText = document.getElementById("error-text");
+const sortSelect = document.getElementById("sort-select");
+const tagInput = document.getElementById("tag-input");
+const refreshBtn = document.getElementById("refresh-btn");
+
+function formatUSD(x) {
+  if (!x || isNaN(x)) return "-";
+  if (x >= 1e6) return "$" + (x/1e6).toFixed(1) + "M";
+  if (x >= 1e3) return "$" + (x/1e3).toFixed(1) + "K";
+  return "$" + x.toFixed(2);
+}
+
+function formatProb(p) {
+  if (p == null || isNaN(p)) return "-";
+  return (p * 100).toFixed(1) + "%";
+}
+
+function parseOutcomeInfo(m) {
+  let outcomes = [];
+  let prices = [];
+  if (typeof m.outcomes === "string") outcomes = m.outcomes.split(",").map(s=>s.trim());
+  if (typeof m.outcomePrices === "string") {
+    prices = m.outcomePrices.replace("[","").replace("]","").split(",").map(x => parseFloat(x));
+  }
+  return { outcomes, prices };
+}
+
+function computeMetrics(m) {
+  let { outcomes, prices } = parseOutcomeInfo(m);
+  let yes = prices[0] ?? null;
+  let no = prices[1] ?? null;
+
+  let gap = null;
+  if (yes != null && no != null) gap = 1 - (yes + no);
+
+  return {
+    yes, no,
+    bundleGap: gap,
+    liquidity: Number(m.liquidityNum || 0),
+    volume24h: Number(m.volume24hr || 0),
+    category: m.category || "",
+    end: m.endDate ? new Date(m.endDate) : null
+  };
+}
+
+function row(m) {
+  const metrics = computeMetrics(m);
+  const tr = document.createElement("tr");
+
+  tr.innerHTML = `
+    <td>
+      <div>${m.question || "Untitled"}</div>
+      <a href="https://polymarket.com/market/${m.slug}" target="_blank">Open →</a>
+    </td>
+    <td>${metrics.category || "-"}</td>
+    <td>
+      <div class="pill pill-green">YES ${formatProb(metrics.yes)}</div>
+      <div class="pill pill-red">NO ${formatProb(metrics.no)}</div>
+    </td>
+    <td>${formatUSD(metrics.liquidity)}</td>
+    <td>${formatUSD(metrics.volume24h)}</td>
+    <td class="pill">${metrics.bundleGap ? (metrics.bundleGap*100).toFixed(2)+"¢" : "-"}</td>
+  `;
+  return tr;
+}
+
+function applyFilters() {
+  let list = rawMarkets.map(m => ({ m, metrics: computeMetrics(m) }));
+  const tag = tagInput.value.toLowerCase().trim();
+  if (tag) {
+    list = list.filter(x =>
+      x.m.question?.toLowerCase().includes(tag) ||
+      x.metrics.category?.toLowerCase().includes(tag)
+    );
+  }
+
+  const sort = sortSelect.value;
+  list.sort((a,b)=>{
+    if (sort==="liquidity") return b.metrics.liquidity - a.metrics.liquidity;
+    if (sort==="volume24h") return b.metrics.volume24h - a.metrics.volume24h;
+    if (sort==="bundleGap") return (b.metrics.bundleGap||-999)-(a.metrics.bundleGap||-999);
+    if (sort==="endSoon") return (a.metrics.end?.getTime()||9e15)-(b.metrics.end?.getTime()||9e15);
+    return 0;
+  });
+
+  tbody.innerHTML = "";
+  list.forEach(x => tbody.appendChild(row(x.m)));
+
+  statusText.textContent = `Showing ${list.length} markets`;
+}
+
+async function fetchMarkets() {
+  statusText.textContent = "Loading markets…";
+  errorText.textContent = "";
+  tbody.innerHTML = "";
+
+  try {
+    const target = API_BASE + "/markets?limit=120&order=liquidityNum&ascending=false";
+
+    // RELIABLE PROXY
+    const proxyUrl = "https://api.allorigins.win/get?url=" + encodeURIComponent(target);
+
+    const res = await fetch(proxyUrl);
+    const wrapped = await res.json();
+
+    const data = JSON.parse(wrapped.contents);
+
+    let arr = [];
+    if (Array.isArray(data)) arr = data;
+    else if (Array.isArray(data.markets)) arr = data.markets;
+    else throw new Error("Unexpected structure");
+
+    rawMarkets = arr.filter(m => m.closed === false || m.active === true);
+    applyFilters();
+  }
+  catch (err) {
+    console.error(err);
+    errorText.textContent = "Error loading markets: " + err.message;
+    statusText.textContent = "Failed.";
+  }
+}
+
+refreshBtn.onclick = fetchMarkets;
+sortSelect.onchange = applyFilters;
+tagInput.oninput = applyFilters;
+
+fetchMarkets();
+</script>
+
+</body>
+</html>
